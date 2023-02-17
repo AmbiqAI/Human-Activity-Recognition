@@ -49,41 +49,6 @@ def normalize_window(df):
     df['X_y'] = (df['X_y'] - df['X_y'].mean())/df['X_y'].astype(float).std()
     df['Y_y'] = (df['Y_y'] - df['Y_y'].mean())/df['Y_y'].astype(float).std()
     df['Z_y'] = (df['Z_y'] - df['Z_y'].mean())/df['Z_y'].astype(float).std()
-    
-#augmentation strategy to permute the timesteps of each window
-def permutation(x, max_segments=20):
-    orig_steps = np.arange(x.shape[1])
-    num_segs = np.random.randint(1, max_segments, size=(x.shape[0]))
-    ret = np.zeros_like(x)
-    print("Orig Steps")
-    print(orig_steps)
-    print("num_segs")
-    print(num_segs)
-    for i, pat in enumerate(x):
-        print("i = %d" % i)
-        print("pat")
-        print(pat)
-       
-        if num_segs[i] > 1:
-            splits = np.array_split(orig_steps, num_segs[i])
-            print("splits")
-            print(splits)
-            print("perm")
-            print(np.random.permutation(splits))
-            warp = np.concatenate(np.random.permutation(splits)).ravel()
-            print("warp")
-            print(warp)
-            ret[i] = pat[warp]
-        else:
-            ret[i] = pat
-    return ret
-
-
-
-def DA_Scaling(X, sigma=0.1):
-    scalingFactor = np.random.normal(loc=1.0, scale=sigma, size=(1,X.shape[1])) # shape=(1,3)
-    myNoise = np.matmul(np.ones((X.shape[0],1)), scalingFactor)
-    return X*myNoise
 
 ## This example using cubic splice is not the best approach to generate random curves. 
 ## You can use other aprroaches, e.g., Gaussian process regression, Bezier curve, etc.
@@ -135,19 +100,16 @@ def augment(X, jitter_sigma=0.05, scaling_sigma=0.1):
         #     oplt.plot(orig)
         #     xplt = fig.add_subplot(2,4,2)
         #     xplt.plot(X_new[i])  
-        #     plt.show()  
+        #     plt.show()
+    print("len of x_new is %d" % len(X_new))
     return X_new
 
 
-def userBatches(accelFile, gyroFile, windowSize, stride, windows, vectorizedActivities):
+def userBatches(accelFile, gyroFile, windowSize, stride, windows, vectorizedActivities, lb, labels):
     accel = pd.read_csv(accelFile, names=['user id', 'Activity Label', 'Time Stamp', 'X', 'Y', 'Z'])
     gyro = pd.read_csv(gyroFile, names=['user id', 'Activity Label', 'Time Stamp', 'X', 'Y', 'Z'])
     accel['Z'] = accel['Z'].str[0: -1]
     gyro['Z'] = gyro['Z'].str[0: -1]
-    # print (accel)
-    # print (accel.index)
-    # if accel.loc[0,:]['user id'] != gyro.loc['0.0',:]['user id']:
-    #     print("mismatch")
 
     for label in labels:
         #merge accel and gyroscope data to have 6 channels
@@ -163,12 +125,93 @@ def userBatches(accelFile, gyroFile, windowSize, stride, windows, vectorizedActi
             ctgrs = lb.transform([label]).tolist()[0]
             vectorizedActivities.append(ctgrs)
             windows.append(newWindow)
+        print(".", end = "")
 
 def representative_dataset():
-   X_rep = train_test_split(X_train, y_train, test_size=0.3, random_state=RANDOM_SEED)[1]
+   X_rep = train_test_split(data, label, test_size=0.3, random_state=seed)[1]
    yield [X_rep]         
 
 # def train_model(params: TrainParams):
+def get_dataset(params: TrainParams):
+    # If augmented dataset pkt exists, load that
+    #  otherwise, if pre-processed baseline dataset exists, load that and augment it
+    #   otherwise, load the raw data, process it, and augment it
+    aug_file = params.augmented_dataset
+    if aug_file and os.path.isfile(aug_file):
+        print("Loading augmented dataset from " + aug_file)
+        ds = load_pkl(aug_file)
+        return ds["X"], ds["y"], ds["XT"], ds["yt"]
+
+    processed_file = params.processed_dataset
+    if not os.path.isfile(processed_file):
+        print("Creating processed dataset")
+        # Generate a processed file from scratch
+        accelDirs = list(os.scandir(params.dataset_dir+'/accel'))[2:53]
+        del accelDirs[37:41]
+        gyroDirs = list(os.scandir(params.dataset_dir+'/gyro'))[2:53]
+        del gyroDirs[37:41]
+        allDirs = list(zip(accelDirs, gyroDirs))
+        training_files_count = 35 # len(accelDirs) * params.training_dataset_percent / 100
+        print(training_files_count)
+        trainingIndices = np.random.choice(len(allDirs), training_files_count, replace=False).tolist()
+        trainingDirs = [allDirs[i] for i in range(len(allDirs)) if i in trainingIndices]     
+        testDirs = [x for x in allDirs if x not in trainingDirs]
+
+        labels = ['A', 'B', 'C', 'D', 'E']
+        lb = LabelBinarizer()  
+        lb.fit(labels)
+
+        aug_X = []
+        aug_y = []
+        aug_testX = []
+        aug_testy = []
+        
+        # Create batches by moving a sampling window over each user's data
+        for accelFile, gyroFile in trainingDirs:
+            userBatches(accelFile, gyroFile, params.num_time_steps, params.sample_step, aug_X, aug_y, lb, labels)
+            print("-", end = "")
+        for accelFile, gyroFile in testDirs:
+            userBatches(accelFile, gyroFile,params.num_time_steps, params.sample_step, aug_testX, aug_testy, lb, labels)
+            print("-", end = "")
+        print("")
+        aug_y = np.asarray(aug_y, dtype = np.float32)
+        aug_X = np.asarray(aug_X, dtype= np.float32).reshape(-1, params.num_time_steps, params.num_features)
+        aug_testX = np.asarray(aug_testX, dtype= np.float32).reshape(-1, params.num_time_steps, params.num_features)
+        aug_testy = np.asarray(aug_testy, dtype = np.float32)   
+
+        save_pkl(processed_file, X=aug_X, y=aug_y, XT=aug_testX, yt=aug_testy)
+        if params.augmentations == 0:
+            return aug_X, aug_y, aug_testX, aug_testy
+
+    else:
+        # Load it
+        print("Loading processed dataset from " + processed_file)
+        ds = load_pkl(processed_file)
+        aug_X = ds["X"]
+        aug_y = ds["y"]
+        aug_testX = ds["XT"]
+        aug_testy = ds["yt"]
+        if params.augmentations == 0:
+            return aug_X, aug_y, aug_testX, aug_testy
+    
+    # Augment if any are requested
+    print("Augmenting baseline by %dx" % params.augmentations)
+
+    orig_X = aug_X
+    orig_testX = aug_testX
+    orig_y = aug_y
+    orig_testy = aug_testy
+    
+    for i in range(params.augmentations):
+            aug_X = np.concatenate([aug_X, augment(orig_X)])       
+            aug_y = np.concatenate([aug_y, orig_y])       
+            # aug_testX = np.concatenate([aug_testX, augment(orig_testX)])       
+            # aug_testy = np.concatenate([aug_testy, orig_testy])
+
+    if params.save_processed_dataset:
+        save_pkl(params.augmented_dataset, X=aug_X, y=aug_y, XT=aug_testX, yt=aug_testy)
+
+    return aug_X, aug_y, aug_testX, aug_testy
 
 
 def create_parser():
@@ -182,104 +225,29 @@ def create_parser():
         description="Train HAR model",
     )
 
+def decay(epoch):
+        if epoch < 15:
+            return 1e-3
+        if epoch < 30:
+            return 1e-4
+        return 1e-5
+
 if __name__ == "__main__":
-    # parser = create_parser()
+    parser = create_parser()
+    params = parser.parse_typed_args()
+    # Load Data
+    aug_data, aug_labels, test_data, test_labels = get_dataset(params)
+    print(len(aug_data))
     # train_model(parser.parse_typed_args())
-
-    accelDirs = list(os.scandir('accel'))[2:53]
-    print(accelDirs)
-    del accelDirs[37:41]
-    gyroDirs = list(os.scandir('gyro'))[2:53]
-    del gyroDirs[37:41]
-    labels = ['A', 'B', 'C', 'D', 'E']
-    allDirs = list(zip(accelDirs, gyroDirs))
-    trainingIndices = np.random.choice(len(allDirs), 35, replace=False).tolist() # TODO make 35 not literal
-    trainingDirs = [allDirs[i] for i in range(len(allDirs)) if i in trainingIndices]
-
-    print("Number of users in Training Set: %d" % len(trainingIndices))
-    trainingIndices.sort()
-    # for index in trainingIndices:
-    #     print("User " + str(index))
-    #rest go to test set
-    testDirs = [x for x in allDirs if x not in trainingDirs]
-    # print("Users in Test Set:\n")
-    # for index in [x for x in range(len(allDirs)) if x not in trainingIndices]:
-    #     print("User " + str(index))
-    
-    lb = LabelBinarizer()
-    print(labels)
-    print("Before lb")    
-    lb.fit(labels)
-    #EXAMPLE OF OUTPUT
-    lb.transform(['A'])
-    print("after transform lb")    
-    print("After lb")    
-
-    # Creates 200 timestep windows that slide 20 timesteps at each iteration
-    N_TIME_STEPS = 200
-    N_FEATURES = 6
-    step = 20
-
-    X_train = []
-    y_train = []
-    X_test = []
-    y_test = []
-
-    #CREATING BATCHES OF WINDOWS FOR EACH USER IN TEST & TRAIN SET
-    # for accelFile, gyroFile in trainingDirs:
-    #     userBatches(accelFile, gyroFile, N_TIME_STEPS, step, X_train, y_train)
-    # for accelFile, gyroFile in testDirs:
-    #     userBatches(accelFile, gyroFile,N_TIME_STEPS, step, X_test, y_test)
-
-    # save_pkl("test.pkl", X=X_train, y=y_train, XT=X_test, yt=y_test)
-    # ds = load_pkl("test.pkl")
-    # X_train = ds["X"]
-    # y_train = ds["y"]
-    # X_test = ds["XT"]
-    # y_test = ds["yt"]
-
-    # print(len(X_train))
-    # print(len(y_train))
-    
-    # print(len(X_test))
-    # print(len(y_test))
-
-    # # Convert traning and test data to numpy arrays.
-
-    # y_train = np.asarray(y_train, dtype = np.float32)
-    # X_train = np.asarray(X_train, dtype= np.float32).reshape(-1, N_TIME_STEPS, N_FEATURES)
-    # X_test = np.asarray(X_test, dtype= np.float32).reshape(-1, N_TIME_STEPS, N_FEATURES)
-    # y_test = np.asarray(y_test, dtype = np.float32)
-    # save_pkl("nparray.pkl", X=X_train, y=y_train, XT=X_test, yt=y_test)
-    
-    ds = load_pkl("nparray.pkl")
-    X_train = ds["X"]
-    y_train = ds["y"]
-    X_test = ds["XT"]
-    y_test = ds["yt"]
-    # Incorporate Data Augmentation Through Permutations
-    print("Before Augmentation X_train len is %d "%+ len(X_train))
-
-    aug_x = np.concatenate([X_train, augment(X_train)])
-    aug_x = np.concatenate([aug_x, augment(X_train)])
-    aug_x = np.concatenate([aug_x, augment(X_train)])
-    aug_x = np.concatenate([aug_x, augment(X_train)])
-    # aug_x = np.concatenate([X_train, DA_Jitter(DA_TimeWarp(X_train))])
-
-    print("After Augmentation X_train len is %d " % len(aug_x))
-    aug_y = np.concatenate([y_train, y_train])
-    aug_y = np.concatenate([aug_y, y_train])
-    aug_y = np.concatenate([aug_y, y_train])
-    aug_y = np.concatenate([aug_y, y_train])
 
     # # Initialize Hyperparameters
     verbose = 1
-    epochs = 20
-    batch_size = 400
+    epochs = params.epochs
+    batch_size = params.batch_size
 
-    n_timesteps = X_train.shape[1]
-    n_features = X_train.shape[2]
-    n_outputs = y_train.shape[1]
+    n_timesteps = aug_data.shape[1]
+    n_features = aug_data.shape[2]
+    n_outputs = aug_labels.shape[1]
 
     print('n_timesteps : ', n_timesteps)
     print('n_features : ', n_features)
@@ -287,6 +255,28 @@ if __name__ == "__main__":
 
     # # Model
     # Opted for 1d Convolutional layers because they work well with time series data. Added dropout layers and l2 regularizers to reduce some of the overfitting that was occurring during testing.
+
+    early_stopping = tf.keras.callbacks.EarlyStopping(
+            monitor="accuracy",
+            min_delta=0,
+            patience=10,
+            verbose=0,
+            mode="auto",
+            restore_best_weights=True,
+        )
+
+    checkpoint_weight_path = str(params.job_dir) + "/model.weights"
+    checkpoint = tf.keras.callbacks.ModelCheckpoint(
+        filepath=checkpoint_weight_path,
+        monitor="accuracy",
+        save_best_only=True,
+        save_weights_only=True,
+        mode="auto",
+        verbose=1,
+    )
+    tf_logger = tf.keras.callbacks.CSVLogger(str(params.job_dir) + "/history.csv")
+    lr_scheduler = tf.keras.callbacks.LearningRateScheduler(decay)
+    model_callbacks = [early_stopping, checkpoint, tf_logger, lr_scheduler]
 
     model = Sequential()
     model.add(Conv1D(filters=16, kernel_size=3, activation='relu', input_shape=(n_timesteps,n_features)))
@@ -303,19 +293,23 @@ if __name__ == "__main__":
     model.summary()
 
 
-    model.compile(loss='categorical_crossentropy', optimizer=Adam(learning_rate= 0.001), metrics=['accuracy', 'mean_absolute_error'])
+    # model.compile(loss='categorical_crossentropy', optimizer=Adam(learning_rate= 0.001), metrics=['accuracy', 'mean_absolute_error'])
+    model.compile(
+        loss='categorical_crossentropy', 
+        optimizer=Adam(learning_rate=5e-4, beta_1=0.9, beta_2=0.98, epsilon=1e-9), 
+        metrics=['accuracy', 'mean_absolute_error'])
 
     # fit network
-    history = model.fit(aug_x, aug_y, validation_data=(X_test, y_test), 
-                        epochs=epochs, batch_size=batch_size, verbose=verbose)
+    history = model.fit(aug_data, aug_labels, validation_data=(test_data, test_labels), 
+                        epochs=epochs, batch_size=batch_size, verbose=verbose, callbacks=model_callbacks,)
 
 
     # evaluate model
-    (loss, accuracy, mae) = model.evaluate(X_test, y_test, batch_size=batch_size, verbose=verbose)
+    (loss, accuracy, mae) = model.evaluate(test_data, test_labels, batch_size=batch_size, verbose=verbose)
     print("[INFO] loss={:.4f}, accuracy: {:.4f}%".format(loss, accuracy * 100))
 
 
-    model.save('models/full_model.h5')
+    model.save(params.trained_model_dir + "/" + params.model_name + ".h5")
     # # Model Metrics
 
     # confusion matrix
@@ -324,10 +318,10 @@ if __name__ == "__main__":
             'STAIRS',
             'SITTING',
             'STANDING']
-    y_pred_test = model.predict(X_test,  verbose=0)
+    y_pred_test = model.predict(test_data,  verbose=0)
     # Take the class with the highest probability from the test predictions
     max_y_pred_test = np.argmax(y_pred_test, axis=1)
-    max_y_test = np.argmax(y_test, axis=1)
+    max_y_test = np.argmax(test_labels, axis=1)
 
     matrix = metrics.confusion_matrix(max_y_test, max_y_pred_test)
     plt.figure(figsize=(6, 4))
@@ -369,7 +363,6 @@ if __name__ == "__main__":
     plt.xlabel('epoch')
     plt.legend(['train', 'test'], loc='upper left')
     plt.show()
-
 
     # # Quantize
 
