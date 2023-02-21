@@ -205,8 +205,6 @@ def get_dataset(params: TrainParams):
     for i in range(params.augmentations):
             aug_X = np.concatenate([aug_X, augment(orig_X)])       
             aug_y = np.concatenate([aug_y, orig_y])       
-            # aug_testX = np.concatenate([aug_testX, augment(orig_testX)])       
-            # aug_testy = np.concatenate([aug_testy, orig_testy])
 
     if params.save_processed_dataset:
         save_pkl(params.augmented_dataset, X=aug_X, y=aug_y, XT=aug_testX, yt=aug_testy)
