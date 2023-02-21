@@ -4,3 +4,7 @@ numpy
 seaborn
 scipy
 matplotlib
+pydantic
+pydantic_argparse
+tensorflow_model_optimization
+scikit-learn

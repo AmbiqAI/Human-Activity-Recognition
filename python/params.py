@@ -18,7 +18,7 @@ class TrainParams(BaseModel):
     batch_size: int = Field(32, description="Batch Size")
     augmentations: int = Field(8, description="Number of augmentation passes")
     save_processed_dataset: bool = Field(True, description="Save processed datasets as pkls")
-    epochs: int =Field(10, description="Number of training epochs")
+    epochs: int =Field(30, description="Number of training epochs")
     model_name: str = Field("model", description="Name of trained model")
     training_dataset_percent: int = Field(70, description="Percent of records used for training")
 
