@@ -21,4 +21,6 @@ class TrainParams(BaseModel):
     epochs: int =Field(30, description="Number of training epochs")
     model_name: str = Field("model", description="Name of trained model")
     training_dataset_percent: int = Field(70, description="Percent of records used for training")
+    show_training_plot: bool = Field(True, description="Show training statistics plots")
+    train_model: bool = Field(False, description="Train the model, otherwise load existing model")
 

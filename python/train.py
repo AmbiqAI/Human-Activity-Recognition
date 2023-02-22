@@ -2,7 +2,7 @@ import os
 import sys
 import pydantic_argparse
 from params import TrainParams
-from utils import save_pkl, load_pkl
+from utils import save_pkl, load_pkl, xxd_c_dump
 
 import tensorflow as tf
 import numpy as np
@@ -127,11 +127,7 @@ def userBatches(accelFile, gyroFile, windowSize, stride, windows, vectorizedActi
             windows.append(newWindow)
         print(".", end = "")
 
-def representative_dataset():
-   X_rep = train_test_split(data, label, test_size=0.3, random_state=seed)[1]
-   yield [X_rep]         
 
-# def train_model(params: TrainParams):
 def get_dataset(params: TrainParams):
     # If augmented dataset pkt exists, load that
     #  otherwise, if pre-processed baseline dataset exists, load that and augment it
@@ -230,86 +226,9 @@ def decay(epoch):
             return 1e-4
         return 1e-5
 
-if __name__ == "__main__":
-    parser = create_parser()
-    params = parser.parse_typed_args()
-    # Load Data
-    aug_data, aug_labels, test_data, test_labels = get_dataset(params)
-    print(len(aug_data))
-    # train_model(parser.parse_typed_args())
+def plot_training_results(model, history):
 
-    # # Initialize Hyperparameters
-    verbose = 1
-    epochs = params.epochs
-    batch_size = params.batch_size
-
-    n_timesteps = aug_data.shape[1]
-    n_features = aug_data.shape[2]
-    n_outputs = aug_labels.shape[1]
-
-    print('n_timesteps : ', n_timesteps)
-    print('n_features : ', n_features)
-    print('n_outputs : ', n_outputs)
-
-    # # Model
-    # Opted for 1d Convolutional layers because they work well with time series data. Added dropout layers and l2 regularizers to reduce some of the overfitting that was occurring during testing.
-
-    early_stopping = tf.keras.callbacks.EarlyStopping(
-            monitor="accuracy",
-            min_delta=0,
-            patience=10,
-            verbose=0,
-            mode="auto",
-            restore_best_weights=True,
-        )
-
-    checkpoint_weight_path = str(params.job_dir) + "/model.weights"
-    checkpoint = tf.keras.callbacks.ModelCheckpoint(
-        filepath=checkpoint_weight_path,
-        monitor="accuracy",
-        save_best_only=True,
-        save_weights_only=True,
-        mode="auto",
-        verbose=1,
-    )
-    tf_logger = tf.keras.callbacks.CSVLogger(str(params.job_dir) + "/history.csv")
-    lr_scheduler = tf.keras.callbacks.LearningRateScheduler(decay)
-    model_callbacks = [early_stopping, checkpoint, tf_logger, lr_scheduler]
-
-    model = Sequential()
-    model.add(Conv1D(filters=16, kernel_size=3, activation='relu', input_shape=(n_timesteps,n_features)))
-    model.add(Conv1D(filters=32, kernel_size=3, activation='relu', padding = 'same', kernel_regularizer=reg.l2(l=0.15)))
-    model.add(Dropout(0.2))
-    model.add(Conv1D(filters=32, kernel_size=3, activation='relu', padding = 'same', kernel_regularizer=reg.l2(l=0.15)))
-    model.add(Dropout(0.3))
-    model.add(Conv1D(filters=128, kernel_size=3, activation='relu', padding = 'same', kernel_regularizer=reg.l2(l=0.15)))
-    model.add(Dropout(0.4))
-    model.add(MaxPooling1D(pool_size=2))
-    model.add(Flatten())
-    model.add(Dense(n_outputs, activation='softmax'))
-
-    model.summary()
-
-
-    # model.compile(loss='categorical_crossentropy', optimizer=Adam(learning_rate= 0.001), metrics=['accuracy', 'mean_absolute_error'])
-    model.compile(
-        loss='categorical_crossentropy', 
-        optimizer=Adam(learning_rate=5e-4, beta_1=0.9, beta_2=0.98, epsilon=1e-9), 
-        metrics=['accuracy', 'mean_absolute_error'])
-
-    # fit network
-    history = model.fit(aug_data, aug_labels, validation_data=(test_data, test_labels), 
-                        epochs=epochs, batch_size=batch_size, verbose=verbose, callbacks=model_callbacks,)
-
-
-    # evaluate model
-    (loss, accuracy, mae) = model.evaluate(test_data, test_labels, batch_size=batch_size, verbose=verbose)
-    print("[INFO] loss={:.4f}, accuracy: {:.4f}%".format(loss, accuracy * 100))
-
-
-    model.save(params.trained_model_dir + "/" + params.model_name + ".h5")
-    # # Model Metrics
-
+    # Model Metrics
     # confusion matrix
     LABELS = ['WALKING',
             'JOGGING',
@@ -362,14 +281,110 @@ if __name__ == "__main__":
     plt.legend(['train', 'test'], loc='upper left')
     plt.show()
 
-    # # Quantize
+def train_model(params: TrainParams, train_data, train_labels, test_data, test_labels):
+    # Initialize Hyperparameters
+    verbose = 1
+    epochs = params.epochs
+    batch_size = params.batch_size
 
-    MODELS_DIR = 'trained_models/'
-    if not os.path.exists(MODELS_DIR):
-        os.mkdir(MODELS_DIR)
-    MODEL_TF = MODELS_DIR + 'model'
-    MODEL_TFLITE = MODELS_DIR + 'model.tflite'
-    MODEL_TFLITE_MICRO = MODELS_DIR + 'model.cc'
+    n_timesteps = aug_data.shape[1]
+    n_features = aug_data.shape[2]
+    n_outputs = aug_labels.shape[1]
+
+    print('[INFO] n_timesteps : ', n_timesteps)
+    print('[INFO] n_features : ', n_features)
+    print('[INFO] n_outputs : ', n_outputs)
+
+    # Model Callbacks
+    early_stopping = tf.keras.callbacks.EarlyStopping(
+            monitor="accuracy",
+            min_delta=0,
+            patience=10,
+            verbose=0,
+            mode="auto",
+            restore_best_weights=True,
+        )
+
+    checkpoint_weight_path = str(params.job_dir) + "/model.weights"
+    checkpoint = tf.keras.callbacks.ModelCheckpoint(
+        filepath=checkpoint_weight_path,
+        monitor="accuracy",
+        save_best_only=True,
+        save_weights_only=True,
+        mode="auto",
+        verbose=1,
+    )
+    tf_logger = tf.keras.callbacks.CSVLogger(str(params.job_dir) + "/history.csv")
+    lr_scheduler = tf.keras.callbacks.LearningRateScheduler(decay)
+    model_callbacks = [early_stopping, checkpoint, tf_logger, lr_scheduler]
+
+    # Model 
+    model = Sequential()
+    model.add(Conv1D(filters=16, kernel_size=3, activation='relu', input_shape=(n_timesteps,n_features)))
+    model.add(Conv1D(filters=32, kernel_size=3, activation='relu', padding = 'same', kernel_regularizer=reg.l2(l=0.15)))
+    model.add(Dropout(0.2))
+    model.add(Conv1D(filters=32, kernel_size=3, activation='relu', padding = 'same', kernel_regularizer=reg.l2(l=0.15)))
+    model.add(Dropout(0.3))
+    model.add(Conv1D(filters=128, kernel_size=3, activation='relu', padding = 'same', kernel_regularizer=reg.l2(l=0.15)))
+    model.add(Dropout(0.4))
+    model.add(MaxPooling1D(pool_size=2))
+    model.add(Flatten())
+    model.add(Dense(n_outputs, activation='softmax'))
+
+    model.summary()
+
+    model.compile(
+        loss='categorical_crossentropy', 
+        optimizer=Adam(learning_rate=5e-4, beta_1=0.9, beta_2=0.98, epsilon=1e-9), 
+        metrics=['accuracy', 'mean_absolute_error'])
+
+    # fit network
+    history = model.fit(aug_data, aug_labels, validation_data=(test_data, test_labels), 
+                        epochs=epochs, batch_size=batch_size, verbose=verbose, callbacks=model_callbacks,)
+
+
+    # evaluate model
+    (loss, accuracy, mae) = model.evaluate(test_data, test_labels, batch_size=batch_size, verbose=verbose)
+    print("[INFO] loss={:.4f}, accuracy: {:.4f}%, mean absolute error={:..4f}".format(loss, accuracy * 100, mae))
+    
+    model.save(params.trained_model_dir + "/" + params.model_name + ".h5")
+
+    return model, history
+
+def load_existing_model(params: TrainParams):
+    return load_model(params.trained_model_dir + "/" + params.model_name + ".h5") 
+
+if __name__ == "__main__":
+    parser = create_parser()
+    params = parser.parse_typed_args()
+
+    # Load Data
+    aug_data, aug_labels, test_data, test_labels = get_dataset(params)
+    
+    # Train model
+    if params.train_model:
+        model, history = train_model(params, aug_data, aug_labels, test_data, test_labels)
+        if params.show_training_plot:
+            plot_training_results(model, history)
+    else:
+        model = load_existing_model(params)
+    
+    model.summary()
+
+    # Quantize and convert
+    # MODELS_DIR = 'trained_models/'
+    # if not os.path.exists(MODELS_DIR):
+    #     os.mkdir(MODELS_DIR)
+    # MODEL_TF = MODELS_DIR + 'model'
+    # MODEL_TFLITE = MODELS_DIR + 'model.tflite'
+    # MODEL_TFLITE_MICRO = MODELS_DIR + 'model.cc'
+
+    tflite_filename = params.trained_model_dir + "/" + params.model_name + ".tflite"
+    tflm_filename = params.trained_model_dir + "/" + params.model_name + ".cc"
+    
+    def representative_dataset():
+        # X_rep = train_test_split(data, label, test_size=0.3, random_state=seed)[1]
+        yield [test_data]    # TODO get better dataset, but aug_data is too large
 
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
     converter.experimental_new_converter = True
@@ -381,10 +396,13 @@ if __name__ == "__main__":
     converter.inference_input_type = tf.int8 
     converter.inference_output_type = tf.int8
     tflite_quant_model = converter.convert()
-    print("Size of Quantized Model: " + str(len(tflite_quant_model)))
+    print("[INFO] Size of Quantized Model: " + str(len(tflite_quant_model)))
+    with open(tflite_filename, 'wb') as f:
+        f.write(tflite_quant_model)
+    
+    # Evaluate tflite model
     interpreter = tf.lite.Interpreter(model_path = tflite_filename)
-    interpreter.allocate_tensors()
-
+    interpreter.allocate_tensors() 
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
@@ -392,8 +410,8 @@ if __name__ == "__main__":
     output_scale, output_zero_point = output_details[0]["quantization"]
 
     accurate = 0
-    X_test_int8 = np.asarray(X_test/input_scale + input_zero_point, dtype=np.int8)
-    for i in range(len(X_test)):
+    X_test_int8 = np.asarray(test_data/input_scale + input_zero_point, dtype=np.int8)
+    for i in range(len(test_data)):
         X_test_int8_sample = np.array([X_test_int8[i]])
 
         interpreter.set_tensor(input_details[0]['index'], X_test_int8_sample)
@@ -401,8 +419,15 @@ if __name__ == "__main__":
 
         outputCategories = np.asarray(interpreter.get_tensor(output_details[0]['index']), dtype=np.float32)
         Categories = (outputCategories - output_zero_point) * output_scale
-        if (np.argmax(Categories[0]) == np.argmax(y_test[i])):
+        if (np.argmax(Categories[0]) == np.argmax(test_labels[i])):
             accurate += 1
-    print(str(accurate/len(y_test) * 100) + " % Quantized Accuracy on the test set")
-    tfmicro_filename = tflite_filename.split('.')[0] + '.h'
-    # get_ipython().system('xxd -i $tflite_filename > $tfmicro_filename')
+    print(str(accurate/len(test_labels) * 100) + " % Quantized Accuracy on the test set")
+    # tfmicro_filename = tflite_filename.split('.')[0] + '.h'
+    xxd_c_dump(
+        src_path=tflite_filename,
+        dst_path=tflm_filename,
+        var_name='har_model',
+        chunk_len=12,
+        is_header=True,
+    )
+    # os.system('xxd -i $tflite_filename > $tflm_filename')
