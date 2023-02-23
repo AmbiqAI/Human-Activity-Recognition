@@ -106,6 +106,7 @@ def augment(X, jitter_sigma=0.05, scaling_sigma=0.1):
 
 
 def userBatches(accelFile, gyroFile, windowSize, stride, windows, vectorizedActivities, lb, labels):
+    print(accelFile)
     accel = pd.read_csv(accelFile, names=['user id', 'Activity Label', 'Time Stamp', 'X', 'Y', 'Z'])
     gyro = pd.read_csv(gyroFile, names=['user id', 'Activity Label', 'Time Stamp', 'X', 'Y', 'Z'])
     accel['Z'] = accel['Z'].str[0: -1]
@@ -113,11 +114,11 @@ def userBatches(accelFile, gyroFile, windowSize, stride, windows, vectorizedActi
 
     for label in labels:
         #merge accel and gyroscope data to have 6 channels
-        filt1 = accel.where(accel['Activity Label'] == label).dropna().sort_values('Time Stamp').iloc[:, [3,4,5]]
-        filt2 = gyro.where(gyro['Activity Label'] == label).dropna().sort_values('Time Stamp').iloc[:, [0,3,4,5]]
+        filt1 = accel.where(accel['Activity Label'].str.strip() == label).dropna().sort_values('Time Stamp').iloc[:, [3,4,5]]
+        filt2 = gyro.where(gyro['Activity Label'].str.strip() == label).dropna().sort_values('Time Stamp').iloc[:, [0,3,4,5]]
         merged = filt1.reset_index().merge(filt2.reset_index(), left_index=True, right_index=True, how='left').dropna()
         merged = merged.drop(['index_x','index_y', 'user id'], axis=1)
-        # print (merged.shape[0])
+
         for i in range(0, merged.shape[0] - windowSize, stride):
             newWindow = merged.iloc[i:i+windowSize, :].astype(float)
             normalize_window(newWindow)
@@ -128,27 +129,42 @@ def userBatches(accelFile, gyroFile, windowSize, stride, windows, vectorizedActi
         print(".", end = "")
 
 
-def get_dataset(params: TrainParams):
+def get_dataset(params: TrainParams, fine_tune = False):
     # If augmented dataset pkt exists, load that
     #  otherwise, if pre-processed baseline dataset exists, load that and augment it
     #   otherwise, load the raw data, process it, and augment it
-    aug_file = params.augmented_dataset
+
+    if fine_tune:
+        aug_file = params.dataset_dir+params.augmented_ft_dataset
+    else:
+        aug_file = params.dataset_dir+params.augmented_dataset
+
     if aug_file and os.path.isfile(aug_file):
         print("Loading augmented dataset from " + aug_file)
         ds = load_pkl(aug_file)
         return ds["X"], ds["y"], ds["XT"], ds["yt"]
-
-    processed_file = params.processed_dataset
+    
+    if fine_tune:
+        processed_file = params.dataset_dir+params.processed_ft_dataset
+    else:
+        processed_file = params.dataset_dir+params.processed_dataset
+    
     if not os.path.isfile(processed_file):
-        print("Creating processed dataset")
         # Generate a processed file from scratch
-        accelDirs = list(os.scandir(params.dataset_dir+'/accel'))[2:53]
+        print("Creating processed dataset")
+
+        if fine_tune:
+            accelDirs = list(os.scandir(params.dataset_dir+'/accel_finetune'))[2:53]
+            gyroDirs = list(os.scandir(params.dataset_dir+'/gyro_finetune'))[2:53]
+        else:
+            accelDirs = list(os.scandir(params.dataset_dir+'/accel'))[2:53]
+            gyroDirs = list(os.scandir(params.dataset_dir+'/gyro'))[2:53]
+
         del accelDirs[37:41]
-        gyroDirs = list(os.scandir(params.dataset_dir+'/gyro'))[2:53]
         del gyroDirs[37:41]
         allDirs = list(zip(accelDirs, gyroDirs))
-        training_files_count = 35 # len(accelDirs) * params.training_dataset_percent / 100
-        print(training_files_count)
+        training_files_count = round(len(accelDirs) * params.training_dataset_percent / 100)
+        # print(training_files_count)
         trainingIndices = np.random.choice(len(allDirs), training_files_count, replace=False).tolist()
         trainingDirs = [allDirs[i] for i in range(len(allDirs)) if i in trainingIndices]     
         testDirs = [x for x in allDirs if x not in trainingDirs]
@@ -159,25 +175,25 @@ def get_dataset(params: TrainParams):
 
         aug_X = []
         aug_y = []
-        aug_testX = []
-        aug_testy = []
-        
+        testX = []
+        testy = []
+
         # Create batches by moving a sampling window over each user's data
         for accelFile, gyroFile in trainingDirs:
             userBatches(accelFile, gyroFile, params.num_time_steps, params.sample_step, aug_X, aug_y, lb, labels)
             print("-", end = "")
         for accelFile, gyroFile in testDirs:
-            userBatches(accelFile, gyroFile,params.num_time_steps, params.sample_step, aug_testX, aug_testy, lb, labels)
+            userBatches(accelFile, gyroFile, params.num_time_steps, params.sample_step, testX, testy, lb, labels)
             print("-", end = "")
         print("")
         aug_y = np.asarray(aug_y, dtype = np.float32)
         aug_X = np.asarray(aug_X, dtype= np.float32).reshape(-1, params.num_time_steps, params.num_features)
-        aug_testX = np.asarray(aug_testX, dtype= np.float32).reshape(-1, params.num_time_steps, params.num_features)
-        aug_testy = np.asarray(aug_testy, dtype = np.float32)   
+        testX = np.asarray(testX, dtype= np.float32).reshape(-1, params.num_time_steps, params.num_features)
+        testy = np.asarray(testy, dtype = np.float32)   
 
-        save_pkl(processed_file, X=aug_X, y=aug_y, XT=aug_testX, yt=aug_testy)
+        save_pkl(processed_file, X=aug_X, y=aug_y, XT=testX, yt=testy)
         if params.augmentations == 0:
-            return aug_X, aug_y, aug_testX, aug_testy
+            return aug_X, aug_y, testX, testy
 
     else:
         # Load it
@@ -185,27 +201,26 @@ def get_dataset(params: TrainParams):
         ds = load_pkl(processed_file)
         aug_X = ds["X"]
         aug_y = ds["y"]
-        aug_testX = ds["XT"]
-        aug_testy = ds["yt"]
+        testX = ds["XT"]
+        testy = ds["yt"]
         if params.augmentations == 0:
-            return aug_X, aug_y, aug_testX, aug_testy
+            return aug_X, aug_y, testX, testy
     
     # Augment if any are requested
     print("Augmenting baseline by %dx" % params.augmentations)
-
     orig_X = aug_X
-    orig_testX = aug_testX
+    orig_testX = testX
     orig_y = aug_y
-    orig_testy = aug_testy
+    orig_testy = testy
     
     for i in range(params.augmentations):
             aug_X = np.concatenate([aug_X, augment(orig_X)])       
             aug_y = np.concatenate([aug_y, orig_y])       
 
     if params.save_processed_dataset:
-        save_pkl(params.augmented_dataset, X=aug_X, y=aug_y, XT=aug_testX, yt=aug_testy)
+        save_pkl(aug_file, X=aug_X, y=aug_y, XT=testX, yt=testy)
 
-    return aug_X, aug_y, aug_testX, aug_testy
+    return aug_X, aug_y, testX, testy
 
 
 def create_parser():
@@ -281,10 +296,20 @@ def plot_training_results(model, history):
     plt.legend(['train', 'test'], loc='upper left')
     plt.show()
 
-def train_model(params: TrainParams, train_data, train_labels, test_data, test_labels):
+
+def load_existing_model(params: TrainParams):
+    return load_model(params.trained_model_dir + "/" + params.model_name + ".h5") 
+
+
+def train_model(params: TrainParams, train_data, train_labels, test_data, test_labels, fine_tune = False):
     # Initialize Hyperparameters
     verbose = 1
-    epochs = params.epochs
+
+    if fine_tune:
+        epochs = params.ft_epochs
+    else:
+        epochs = params.epochs
+
     batch_size = params.batch_size
 
     n_timesteps = aug_data.shape[1]
@@ -318,58 +343,66 @@ def train_model(params: TrainParams, train_data, train_labels, test_data, test_l
     lr_scheduler = tf.keras.callbacks.LearningRateScheduler(decay)
     model_callbacks = [early_stopping, checkpoint, tf_logger, lr_scheduler]
 
-    # Model 
-    model = Sequential()
-    model.add(Conv1D(filters=16, kernel_size=3, activation='relu', input_shape=(n_timesteps,n_features)))
-    model.add(Conv1D(filters=32, kernel_size=3, activation='relu', padding = 'same', kernel_regularizer=reg.l2(l=0.15)))
-    model.add(Dropout(0.2))
-    model.add(Conv1D(filters=32, kernel_size=3, activation='relu', padding = 'same', kernel_regularizer=reg.l2(l=0.15)))
-    model.add(Dropout(0.3))
-    model.add(Conv1D(filters=128, kernel_size=3, activation='relu', padding = 'same', kernel_regularizer=reg.l2(l=0.15)))
-    model.add(Dropout(0.4))
-    model.add(MaxPooling1D(pool_size=2))
-    model.add(Flatten())
-    model.add(Dense(n_outputs, activation='softmax'))
+    # Model
+    if fine_tune:
+        model = load_existing_model(params)
+    else:
+        model = Sequential()
+        model.add(Conv1D(filters=16, kernel_size=3, activation='relu', input_shape=(n_timesteps,n_features)))
+        model.add(Conv1D(filters=32, kernel_size=3, activation='relu', padding = 'same', kernel_regularizer=reg.l2(l=0.15)))
+        model.add(Dropout(0.2))
+        model.add(Conv1D(filters=32, kernel_size=3, activation='relu', padding = 'same', kernel_regularizer=reg.l2(l=0.15)))
+        model.add(Dropout(0.3))
+        model.add(Conv1D(filters=128, kernel_size=3, activation='relu', padding = 'same', kernel_regularizer=reg.l2(l=0.15)))
+        model.add(Dropout(0.4))
+        model.add(MaxPooling1D(pool_size=2))
+        model.add(Flatten())
+        model.add(Dense(n_outputs, activation='softmax'))
 
+        model.compile(
+            loss='categorical_crossentropy', 
+            optimizer=Adam(learning_rate=5e-4, beta_1=0.9, beta_2=0.98, epsilon=1e-9), 
+            metrics=['accuracy', 'mean_absolute_error'])
+    
     model.summary()
-
-    model.compile(
-        loss='categorical_crossentropy', 
-        optimizer=Adam(learning_rate=5e-4, beta_1=0.9, beta_2=0.98, epsilon=1e-9), 
-        metrics=['accuracy', 'mean_absolute_error'])
 
     # fit network
     history = model.fit(aug_data, aug_labels, validation_data=(test_data, test_labels), 
                         epochs=epochs, batch_size=batch_size, verbose=verbose, callbacks=model_callbacks,)
 
-
     # evaluate model
     (loss, accuracy, mae) = model.evaluate(test_data, test_labels, batch_size=batch_size, verbose=verbose)
-    print("[INFO] loss={:.4f}, accuracy: {:.4f}%, mean absolute error={:..4f}".format(loss, accuracy * 100, mae))
+    print("[INFO] loss={:.4f}, accuracy: {:.4f}%, mean absolute error={:..4f}%".format(loss, accuracy * 100, mae))
     
     model.save(params.trained_model_dir + "/" + params.model_name + ".h5")
 
     return model, history
 
-def load_existing_model(params: TrainParams):
-    return load_model(params.trained_model_dir + "/" + params.model_name + ".h5") 
 
 if __name__ == "__main__":
     parser = create_parser()
     params = parser.parse_typed_args()
 
-    # Load Data
-    aug_data, aug_labels, test_data, test_labels = get_dataset(params)
+    # Load Baseline Data
+    aug_data, aug_labels, test_data, test_labels = get_dataset(params, False)
+
+    # Load Fine-tune Data
+    ft_aug_data, ft_aug_labels, ft_test_data, ft_test_labels = get_dataset(params, True)
     
     # Train model
     if params.train_model:
-        model, history = train_model(params, aug_data, aug_labels, test_data, test_labels)
+        model, history = train_model(params, aug_data, aug_labels, test_data, test_labels, fine_tune=False)
         if params.show_training_plot:
             plot_training_results(model, history)
     else:
         model = load_existing_model(params)
-    
-    model.summary()
+        model.summary()
+
+    # Fine-tune model
+    if params.fine_tune_model:
+        model, history = train_model(params, ft_aug_data, ft_aug_labels, ft_test_data, ft_test_labels, fine_tune=True)
+        if params.show_training_plot:
+            plot_training_results(model, history)
 
     # Quantize and convert
     # MODELS_DIR = 'trained_models/'
