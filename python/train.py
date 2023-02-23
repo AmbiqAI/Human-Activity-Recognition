@@ -322,7 +322,7 @@ def train_model(params: TrainParams, train_data, train_labels, test_data, test_l
 
     # Model Callbacks
     early_stopping = tf.keras.callbacks.EarlyStopping(
-            monitor="accuracy",
+            monitor="val_loss",
             min_delta=0,
             patience=10,
             verbose=0,
@@ -333,7 +333,7 @@ def train_model(params: TrainParams, train_data, train_labels, test_data, test_l
     checkpoint_weight_path = str(params.job_dir) + "/model.weights"
     checkpoint = tf.keras.callbacks.ModelCheckpoint(
         filepath=checkpoint_weight_path,
-        monitor="accuracy",
+        monitor="val_accuracy",
         save_best_only=True,
         save_weights_only=True,
         mode="auto",
@@ -372,10 +372,9 @@ def train_model(params: TrainParams, train_data, train_labels, test_data, test_l
 
     # evaluate model
     (loss, accuracy, mae) = model.evaluate(test_data, test_labels, batch_size=batch_size, verbose=verbose)
-    print("[INFO] loss={:.4f}, accuracy: {:.4f}%, mean absolute error={:..4f}%".format(loss, accuracy * 100, mae))
-    
     model.save(params.trained_model_dir + "/" + params.model_name + ".h5")
-
+    print("[INFO] loss={:.4f}, accuracy: {:.4f}%, mean absolute error={:.4f}%".format(loss, accuracy * 100, mae))
+    
     return model, history
 
 
