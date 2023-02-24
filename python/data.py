@@ -73,11 +73,14 @@ def DA_TimeWarp(X, sigma=0.2):
     return X_new
 
 
-def augment(X, jitter_sigma=0.05, scaling_sigma=0.1):
+def augment(X, labels, jitter_sigma=0.01, scaling_sigma=0.05):
     X_new = np.zeros(X.shape)
+
     for i,orig in enumerate(X):
         jitterNoise = np.random.normal(loc=0, scale=jitter_sigma, size=orig.shape)
         scaleNoise = np.random.normal(loc=1.0, scale=scaling_sigma, size=orig.shape)
+        #if (labels[i][3] == 0) and (labels[i][4] == 0):
+            # Don't add jitter and scale noise to standing and standing activities
         X_new[i] = orig*scaleNoise+jitterNoise
         X_new[i] = DA_TimeWarp(X_new[i])
 
@@ -200,7 +203,7 @@ def get_dataset(params: TrainParams, fine_tune = False):
     orig_testy = testy
     
     for i in range(params.augmentations):
-            aug_X = np.concatenate([aug_X, augment(orig_X)])       
+            aug_X = np.concatenate([aug_X, augment(orig_X, orig_y)])       
             aug_y = np.concatenate([aug_y, orig_y])
             print("Augmentation pass %d complete" % i)   
 

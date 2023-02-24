@@ -35,11 +35,17 @@ def create_parser():
     )
 
 def decay(epoch):
-        if epoch < 15:
+        if epoch < 5:
             return 1e-3
-        if epoch < 30:
+        if epoch < 15:
             return 1e-4
-        return 1e-5
+        if epoch < 30:
+            return 1e-5
+        return 1e-6
+
+def decay_ft(epoch):
+        return 1e-6
+
 
 def plot_training_results(model, history):
 
@@ -128,7 +134,7 @@ def train_model(params: TrainParams, train_data, train_labels, test_data, test_l
     checkpoint_weight_path = str(params.job_dir) + "/model.h5"
     checkpoint = tf.keras.callbacks.ModelCheckpoint(
         filepath=checkpoint_weight_path,
-        monitor="val_accuracy",
+        monitor="val_loss",
         save_best_only=True,
         save_weights_only=True,
         mode="auto",
@@ -136,7 +142,12 @@ def train_model(params: TrainParams, train_data, train_labels, test_data, test_l
     )
 
     tf_logger = tf.keras.callbacks.CSVLogger(str(params.job_dir) + "/history.csv")
-    lr_scheduler = tf.keras.callbacks.LearningRateScheduler(decay)
+
+    if fine_tune:
+        lr_scheduler = tf.keras.callbacks.LearningRateScheduler(decay_ft)
+    else:
+        lr_scheduler = tf.keras.callbacks.LearningRateScheduler(decay)
+
     model_callbacks = [early_stopping, checkpoint, tf_logger, lr_scheduler]
 
     # Model

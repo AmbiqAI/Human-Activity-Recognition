@@ -21,7 +21,7 @@ class TrainParams(BaseModel):
     augmentations: int = Field(8, description="Number of augmentation passes")
     save_processed_dataset: bool = Field(True, description="Save processed datasets as pkls")
     epochs: int =Field(35, description="Number of training epochs")
-    ft_epochs: int =Field(3, description="Number of fine-tuning epochs")
+    ft_epochs: int =Field(10, description="Number of fine-tuning epochs")
     model_name: str = Field("model", description="Name of trained model")
     training_dataset_percent: int = Field(65, description="Percent of records used for training")
     show_training_plot: bool = Field(True, description="Show training statistics plots")
