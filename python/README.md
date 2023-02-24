@@ -27,14 +27,3 @@ Overall, the main inspiration of the linked repo was the use of sliding windows 
 # Sensor/Data Collection
 
 This example relies on the MPU6050 gyrometer. The sensor is set to have a accelerometer sensitivity of 16G and a gyroscope sensitivity of 500DPS. Although normalizing each window helps account for the differences between the sensors used in the WISDM experiment and the MPU6050, we found it necessary to tune the model. This was done in 'Model Tuning.ipynb', where we utilized an hour's worth of our own activity data (stored in mpu-6050-data.txt) to further train the model.
-
-# Changing the Model
-
-If you wish to change the model, edit the jupyter notebook file in the data directory('Human Activity Recognition.ipynb'). Before you make these edits, ensure that you satisfy the follow:
-
-1. You have installed the all the libraries listed in requirements.txt
-2. You can run xxd commands on your computer
-
-After you alter your model, you should place the .h file (created by the xxd command in the last cell)
-in the src directory and delete the 'quantized_model.h' file that currently exists in it.
-
